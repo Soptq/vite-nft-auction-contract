@@ -1,0 +1,484 @@
+// SPDX-License-Identifier: GPL-3.0
+pragma soliditypp >=0.8.0;
+pragma experimental ABIEncoderV2;
+
+import "./contracts/openzeppelin/token/ERC721/IERC721.sol";
+import "./contracts/openzeppelin/token/ERC721/utils/ERC721Holder.sol";
+
+contract NFTMarketplace is ERC721Holder {
+    event AuctionInitialized(uint256 auctionId);
+    event AuctionCancelled(uint256 auctionId);
+    event BidOffered(uint256 auctionId, address bidder, uint256 bidAmount);
+    event AuctionResolved(uint256 auctionId);
+
+    enum AuctionType{ English, Dutch }
+
+    struct AuctionInfo {
+        AuctionType auctionType;
+        address seller;
+        bool hasEnded;
+    }
+
+    struct AuctionTarget {
+        address targetTokenAddress;
+        uint256 targetTokenId;
+    }
+
+    struct AuctionDate {
+        uint256 startDate;
+        uint256 matureDate;
+        uint256 endDate;
+    }
+
+    struct AuctionPrice {
+        uint256 initialPrice;
+        uint256 endPrice;
+        uint256 reservedPrice;
+    }
+
+    struct AuctionBid {
+        uint256 highestBid;
+        address highestBidder;
+        bool hasBid;
+    }
+
+    struct Auction {
+        uint256 auctionId;
+        
+        AuctionInfo auctionInfo;
+        AuctionTarget auctionTarget;
+        AuctionDate auctionDate;
+        AuctionPrice auctionPrice;
+        AuctionBid auctionBid;
+    }
+
+    uint256 private _nextAuctionId;
+    mapping (uint256 => Auction) private _auctions;
+
+    constructor() {
+        _nextAuctionId = 0;
+    }
+
+    /**
+     * @dev external function to get basic information about an auction.
+     *
+     * @param auctionId the id of the auction
+     */
+    function getAuctionInfo(uint256 auctionId) external view returns (AuctionType, address, bool) {
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        AuctionInfo memory auctionInfo = _auctions[auctionId].auctionInfo;
+        return (auctionInfo.auctionType, auctionInfo.seller, auctionInfo.hasEnded);
+    }
+
+    /**
+     * @dev external function to get auctioned NFT of an auction.
+     *
+     * @param auctionId the id of the auction
+     */
+    function getAuctionTarget(uint256 auctionId) external view returns (address, uint256) {
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        AuctionTarget memory auctionTarget = _auctions[auctionId].auctionTarget;
+        return (auctionTarget.targetTokenAddress, auctionTarget.targetTokenId);
+    }
+
+    /**
+     * @dev external function to get dates about an auction.
+     *
+     * @param auctionId the id of the auction
+     */
+    function getAuctionDate(uint256 auctionId) external view returns (uint256, uint256, uint256) {
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        AuctionDate memory auctionDate = _auctions[auctionId].auctionDate;
+        return (auctionDate.startDate, auctionDate.matureDate, auctionDate.endDate);
+    }
+
+    /**
+     * @dev external function to get prices about an auction.
+     *
+     * @param auctionId the id of the auction
+     */
+    function getAuctionPrice(uint256 auctionId) external view returns (uint256, uint256, uint256) {
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        AuctionPrice memory auctionPrice = _auctions[auctionId].auctionPrice;
+        return (auctionPrice.initialPrice, auctionPrice.endPrice, auctionPrice.reservedPrice);
+    }
+
+    /**
+     * @dev external function to get bids about an auction.
+     *
+     * @param auctionId the id of the auction
+     */
+    function getAuctionBid(uint256 auctionId) external view returns (uint256, address, bool) {
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        AuctionBid memory auctionBid = _auctions[auctionId].auctionBid;
+        return (auctionBid.highestBid, auctionBid.highestBidder, auctionBid.hasBid);
+    }
+
+    /**
+     * @dev external function to get a array of basic information about auctions.
+     *
+     * @param pageNum the page number of the auctions
+     * @param pageSize the size of the page
+     */
+    function getAuctionInfos(uint256 pageNum, uint256 pageSize) external view returns (
+        AuctionType[] memory, 
+        address[] memory, 
+        bool[] memory
+    ) {
+        require(pageNum * pageSize < _nextAuctionId, "Page does not exist");
+        uint256 returnSize = pageSize;
+        if (pageNum * pageSize + pageSize > _nextAuctionId) {
+            returnSize = _nextAuctionId - pageNum * pageSize;
+        }
+        AuctionType[] memory auctionTypes = new AuctionType[](returnSize);
+        address[] memory sellers = new address[](returnSize);
+        bool[] memory hasEndeds = new bool[](returnSize);
+        for (uint256 i = 0; i < returnSize; i++) {
+            uint256 auctionId = pageNum * pageSize + i;
+            AuctionInfo memory auctionInfo = _auctions[auctionId].auctionInfo;
+            auctionTypes[i] = auctionInfo.auctionType;
+            sellers[i] = auctionInfo.seller;
+            hasEndeds[i] = auctionInfo.hasEnded;
+        }
+        return (auctionTypes, sellers, hasEndeds);
+    }
+
+    /**
+     * @dev external function to get a array of auctioned NFTs about auctions.
+     *
+     * @param pageNum the page number of the auctions
+     * @param pageSize the size of the page
+     */
+    function getAuctionTargets(uint256 pageNum, uint256 pageSize) external view returns (
+        address[] memory,
+        uint256[] memory
+    ) {
+        require(pageNum * pageSize < _nextAuctionId, "Page does not exist");
+        uint256 returnSize = pageSize;
+        if (pageNum * pageSize + pageSize > _nextAuctionId) {
+            returnSize = _nextAuctionId - pageNum * pageSize;
+        }
+        address[] memory targetTokenAddresses = new address[](returnSize);
+        uint256[] memory targetTokenIds = new uint256[](returnSize);
+        for (uint256 i = 0; i < returnSize; i++) {
+            uint256 auctionId = pageNum * pageSize + i;
+            AuctionTarget memory auctionTarget = _auctions[auctionId].auctionTarget;
+            targetTokenAddresses[i] = auctionTarget.targetTokenAddress;
+            targetTokenIds[i] = auctionTarget.targetTokenId;
+        }
+        return (targetTokenAddresses, targetTokenIds);
+    }
+
+    /**
+     * @dev external function to get a array of dates about auctions.
+     *
+     * @param pageNum the page number of the auctions
+     * @param pageSize the size of the page
+     */
+    function getAuctionDates(uint256 pageNum, uint256 pageSize) external view returns (
+        uint256[] memory, 
+        uint256[] memory, 
+        uint256[] memory
+    ) {
+        require(pageNum * pageSize < _nextAuctionId, "Page does not exist");
+        uint256 returnSize = pageSize;
+        if (pageNum * pageSize + pageSize > _nextAuctionId) {
+            returnSize = _nextAuctionId - pageNum * pageSize;
+        }
+        uint256[] memory startDates = new uint256[](returnSize);
+        uint256[] memory matureDates = new uint256[](returnSize);
+        uint256[] memory endDates = new uint256[](returnSize);
+        for (uint256 i = 0; i < returnSize; i++) {
+            uint256 auctionId = pageNum * pageSize + i;
+            AuctionDate memory auctionDate = _auctions[auctionId].auctionDate;
+            startDates[i] = auctionDate.startDate;
+            matureDates[i] = auctionDate.matureDate;
+            endDates[i] = auctionDate.endDate;
+        }
+        return (startDates, matureDates, endDates);
+    }
+
+    /**
+     * @dev external function to get a array of prices about auctions.
+     *
+     * @param pageNum the page number of the auctions
+     * @param pageSize the size of the page
+     */
+    function getAuctionPrices(uint256 pageNum, uint256 pageSize) external view returns (
+        uint256[] memory, uint256[] memory, uint256[] memory
+    ) {
+        require(pageNum * pageSize < _nextAuctionId, "Page does not exist");
+        uint256 returnSize = pageSize;
+        if (pageNum * pageSize + pageSize > _nextAuctionId) {
+            returnSize = _nextAuctionId - pageNum * pageSize;
+        }
+        uint256[] memory initialPrices = new uint256[](returnSize);
+        uint256[] memory endPrices = new uint256[](returnSize);
+        uint256[] memory reservedPrices = new uint256[](returnSize);
+        for (uint256 i = 0; i < returnSize; i++) {
+            uint256 auctionId = pageNum * pageSize + i;
+            AuctionPrice memory auctionPrice = _auctions[auctionId].auctionPrice;
+            initialPrices[i] = auctionPrice.initialPrice;
+            endPrices[i] = auctionPrice.endPrice;
+            reservedPrices[i] = auctionPrice.reservedPrice;
+        }
+        return (initialPrices, endPrices, reservedPrices);
+    }
+
+    /**
+     * @dev external function to get a array of bids about auctions.
+     *
+     * @param pageNum the page number of the auctions
+     * @param pageSize the size of the page
+     */
+    function getAuctionBids(uint256 pageNum, uint256 pageSize) external view returns (
+        uint256[] memory, 
+        address[] memory, 
+        bool[] memory
+    ) {
+        require(pageNum * pageSize < _nextAuctionId, "Page does not exist");
+        uint256 returnSize = pageSize;
+        if (pageNum * pageSize + pageSize > _nextAuctionId) {
+            returnSize = _nextAuctionId - pageNum * pageSize;
+        }
+        uint256[] memory highestBids = new uint256[](returnSize);
+        address[] memory highestBidders = new address[](returnSize);
+        bool[] memory hasBids = new bool[](returnSize);
+        for (uint256 i = 0; i < returnSize; i++) {
+            uint256 auctionId = pageNum * pageSize + i;
+            AuctionBid memory auctionBid = _auctions[auctionId].auctionBid;
+            highestBids[i] = auctionBid.highestBid;
+            highestBidders[i] = auctionBid.highestBidder;
+            hasBids[i] = auctionBid.hasBid;
+        }
+        return (highestBids, highestBidders, hasBids);
+    }
+
+    /**
+     * @dev external function to get the total auction count.
+     *
+     */
+    function getAuctionCount() external view returns (uint256) {
+        return _nextAuctionId;
+    }
+    
+    /**
+     * @dev public function to initialize the auction.
+     *
+     * @param auctionType type of the auction
+     * @param tokenAddress address of the token to be auctioned
+     * @param tokenId id of the token to be auctioned
+     * @param startDate start date of the auction
+     * @param matureDate mature date of the auction
+     * @param endDate end date of the auction
+     * @param initialPrice initial price of the auction
+     * @param endPrice end price of the auction
+     * @param reservedPrice reserved price of the auction
+     */
+    function initializeAuction(
+        AuctionType auctionType,
+        address tokenAddress,
+        uint256 tokenId,
+        uint256 startDate,
+        uint256 matureDate,
+        uint256 endDate,
+        uint256 initialPrice,
+        uint256 endPrice,
+        uint256 reservedPrice
+    ) public {
+        // Check arguments
+        require(block.timestamp >= startDate, "Auction start date must be in the future");
+        require(matureDate >= startDate, "matureDate must be after startDate");
+        require(endDate >= matureDate, "endDate must be after matureDate");
+        require(initialPrice <= endPrice, "initialPrice must be less or equal than endPrice");
+        // Pre-construct the auction
+        Auction memory auction = _createAuction(
+            auctionType,
+            tokenAddress,
+            tokenId,
+            startDate,
+            matureDate,
+            endDate,
+            initialPrice,
+            endPrice,
+            reservedPrice
+        );
+
+        // Transfer the token to the contract
+        IERC721(tokenAddress).transferFrom(msg.sender, address(this), tokenId);
+        // Add the auction to the list
+        _auctions[_nextAuctionId] = auction;
+        // Increment the next auction id
+        _nextAuctionId++;
+
+        // Emit the event
+        emit AuctionInitialized(auction.auctionId);
+    }
+
+    /**
+     * @dev public function to cancel the auction if it is not mature.
+     *
+     * @param auctionId id of the auction
+     */
+    function cancelAuction(uint256 auctionId) public {
+        // Check if the auction exists
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+
+        Auction memory auction = _auctions[auctionId];
+        require(auction.auctionInfo.seller == msg.sender, "Only the seller can cancel the auction");
+        require(block.timestamp <= auction.auctionDate.matureDate, "Auction must not be mature");
+
+        auction.auctionInfo.hasEnded = true;
+
+        IERC721(auction.auctionTarget.targetTokenAddress).transferFrom(address(this), auction.auctionInfo.seller, auction.auctionTarget.targetTokenId);
+        if (auction.auctionBid.hasBid) {
+            payable(auction.auctionBid.highestBidder).transfer("tti_5649544520544f4b454e6e40", auction.auctionBid.highestBid);
+        }
+
+        _auctions[auctionId] = auction;
+
+        emit AuctionCancelled(auctionId);
+    } 
+
+    /**
+     * @dev public function to bid the auction if it is still open.
+     *
+     * @param auctionId id of the auction
+     */
+    function bid(uint256 auctionId) public payable {
+        // Check if the auction exists
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        // Check if the auction is valid
+        Auction memory auction = _auctions[auctionId];
+        require(!auction.auctionInfo.hasEnded, "Auction has ended");
+        require(auction.auctionDate.startDate <= block.timestamp, "Auction has not started yet");
+        require(block.timestamp <= auction.auctionDate.endDate, "Auction is finished");
+        uint256 amount = msg.value;
+        uint256 currentPrice = getCurrentPrice(auctionId, block.timestamp);
+        require(amount >= currentPrice, "Bid is too low");
+        if (auction.auctionInfo.auctionType == AuctionType.English) {
+            // refund the previous highest bidder
+            if (auction.auctionBid.hasBid) {
+                payable(auction.auctionBid.highestBidder).transfer("tti_5649544520544f4b454e6e40", auction.auctionBid.highestBid);
+            }
+            auction.auctionBid.highestBid = amount;
+            auction.auctionBid.highestBidder = msg.sender;
+            auction.auctionBid.hasBid = true;
+            _auctions[auctionId] = auction;
+            emit BidOffered(auctionId, msg.sender, amount);
+        } else {
+            // refund the previous highest bidder
+            require(!auction.auctionBid.hasBid, "Dutch auction has already been bid");
+            auction.auctionBid.highestBid = currentPrice;
+            auction.auctionBid.highestBidder = msg.sender;
+            auction.auctionBid.hasBid = true;
+            _auctions[auctionId] = auction;
+            if (amount > currentPrice) {
+                payable(msg.sender).transfer("tti_5649544520544f4b454e6e40", amount - currentPrice);
+            }
+            emit BidOffered(auctionId, msg.sender, currentPrice);
+            // resolve the auction
+            _resolveAuction(auctionId);
+        }
+    }
+
+    /**
+     * @dev public function to finalize the auction if it is end.
+     *
+     * @param auctionId id of the auction
+     */
+    function resolveAuction(uint256 auctionId) public {
+        // Check if the auction exists
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        // Check if the auction is valid
+        Auction memory auction = _auctions[auctionId];
+        require(!auction.auctionInfo.hasEnded, "Auction has ended");
+
+        if (auction.auctionInfo.auctionType == AuctionType.English) {
+            require(block.timestamp > auction.auctionDate.endDate, "Auction is not finished");
+        }
+
+        _resolveAuction(auctionId);
+    }
+
+    /**
+     * @dev public function to get the estimated price of the auction.
+     *
+     * @param auctionId id of the auction
+     */
+    function getCurrentPrice(uint256 auctionId, uint256 currentTime) public view returns (uint256) {
+        // Check if the auction exists
+        require(auctionId < _nextAuctionId, "Auction does not exist");
+        Auction memory auction = _auctions[auctionId];
+        if (currentTime < auction.auctionDate.startDate) {
+            return auction.auctionPrice.initialPrice;
+        }
+
+        if (auction.auctionInfo.auctionType == AuctionType.English) {
+            if (auction.auctionBid.hasBid) {
+                return auction.auctionBid.highestBid;
+            } else {
+                return auction.auctionPrice.initialPrice;
+            }
+        } else {
+            return auction.auctionPrice.initialPrice - (auction.auctionPrice.initialPrice - auction.auctionPrice.endPrice) * (currentTime - auction.auctionDate.startDate) / (auction.auctionDate.endDate - auction.auctionDate.startDate);
+        }
+    }
+
+    /**
+     * @dev internal function to create a auction object.
+     *
+     * @param auctionId id of the auction
+     */
+    function _createAuction(
+        AuctionType auctionType,
+        address tokenAddress,
+        uint256 tokenId,
+        uint256 startDate,
+        uint256 matureDate,
+        uint256 endDate,
+        uint256 initialPrice,
+        uint256 endPrice,
+        uint256 reservedPrice
+    ) internal view returns (Auction memory) {
+        AuctionInfo memory auctionInfo = AuctionInfo(auctionType, msg.sender, false);
+        AuctionTarget memory auctionTarget = AuctionTarget(tokenAddress, tokenId);
+        AuctionDate memory auctionDate = AuctionDate(startDate, matureDate, endDate);
+        AuctionPrice memory auctionPrice = AuctionPrice(initialPrice, endPrice, reservedPrice);
+        AuctionBid memory auctionBid = AuctionBid(0, address(0), false);
+        Auction memory auction = Auction({
+            auctionId: _nextAuctionId,
+            auctionInfo: auctionInfo,
+            auctionTarget: auctionTarget,
+            auctionDate: auctionDate,
+            auctionPrice: auctionPrice,
+            auctionBid: auctionBid
+        });
+        return auction;
+    }
+
+    /**
+     * @dev interval function to finalize the auction if it is end.
+     *
+     * @param auctionId id of the auction
+     */
+    function _resolveAuction(uint256 auctionId) private {
+        Auction memory auction = _auctions[auctionId];
+        if (auction.auctionBid.hasBid) {
+            if (auction.auctionBid.highestBid > auction.auctionPrice.reservedPrice) {
+                IERC721(auction.auctionTarget.targetTokenAddress).transferFrom(address(this), auction.auctionBid.highestBidder, auction.auctionTarget.targetTokenId);
+                payable(auction.auctionInfo.seller).transfer("tti_5649544520544f4b454e6e40", auction.auctionBid.highestBid);
+            } else {
+                IERC721(auction.auctionTarget.targetTokenAddress).transferFrom(address(this), auction.auctionInfo.seller, auction.auctionTarget.targetTokenId);
+                payable(auction.auctionBid.highestBidder).transfer("tti_5649544520544f4b454e6e40", auction.auctionBid.highestBid);
+            }
+        } else {
+            IERC721(auction.auctionTarget.targetTokenAddress).transferFrom(address(this), auction.auctionInfo.seller, auction.auctionTarget.targetTokenId);
+        }
+
+        auction.auctionInfo.hasEnded = true;
+        _auctions[auctionId] = auction;
+
+        emit AuctionResolved(auctionId);
+    }
+}
